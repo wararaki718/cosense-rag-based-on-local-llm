@@ -1,0 +1,19 @@
+[project]
+name = "api-embedding"
+version = "0.1.0"
+description = "Vector Provider for Scrapbox RAG"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "torch",
+    "transformers",
+    "pydantic",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest",
+    "httpx",
+]

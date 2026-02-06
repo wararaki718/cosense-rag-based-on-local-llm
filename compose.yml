@@ -1,0 +1,78 @@
+services:
+  # Infrastructure
+  elasticsearch:
+    build: ./elasticsearch
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Backend Services
+  api-embedding:
+    build:
+      context: .
+      dockerfile: api-embedding/Dockerfile
+    container_name: api-embedding
+    ports:
+      - "8001:8001"
+    environment:
+      - MODEL_NAME=naver/splade-cocondenser-ensemblev2
+      - DEVICE=cpu # Default to CPU in Docker unless specialized runtime used
+    volumes:
+      - ./shared:/app/shared
+
+  api-search:
+    build:
+      context: .
+      dockerfile: api-search/Dockerfile
+    container_name: api-search
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      api-embedding:
+        condition: service_started
+    ports:
+      - "8002:8002"
+    environment:
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - EMBEDDING_API_URL=http://api-embedding:8001
+      - INDEX_NAME=scrapbox-chunks
+
+  api-llm:
+    build:
+      context: .
+      dockerfile: api-llm/Dockerfile
+    container_name: api-llm
+    ports:
+      - "8003:8003"
+    environment:
+      - OLLAMA_URL=http://host.docker.internal:11434
+      - MODEL_NAME=gemma3:4b
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+    container_name: frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api-search
+      - api-llm
+    environment:
+      - NEXT_PUBLIC_SEARCH_API_URL=http://localhost:8002
+      - NEXT_PUBLIC_LLM_API_URL=http://localhost:8003
+
+networks:
+  default:
+    name: scrapbox-rag-network

@@ -1,0 +1,17 @@
+[project]
+name = "api-llm"
+version = "0.1.0"
+description = "Inference Engine for Scrapbox RAG"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "httpx",
+    "pydantic",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest",
+]

@@ -1,0 +1,18 @@
+[project]
+name = "api-search"
+version = "0.1.0"
+description = "Search Engine Wrapper for Scrapbox RAG"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "elasticsearch>=8.0.0",
+    "httpx",
+    "pydantic",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest",
+]
