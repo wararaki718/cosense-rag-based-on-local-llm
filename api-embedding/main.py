@@ -24,7 +24,7 @@ app.add_middleware(
 )
 
 # Configuration
-MODEL_NAME = os.getenv("MODEL_NAME", "naver/splade-cocondenser-ensemblev2")
+MODEL_NAME = os.getenv("MODEL_NAME", "naver/splade_v2_distil")
 DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
 
 print(f"Loading model {MODEL_NAME} to {DEVICE}...")
@@ -48,7 +48,13 @@ async def embed(request: EmbeddingRequest) -> EmbeddingResponse:
         HTTPException: If the vectorization process fails or the model errors.
     """
     try:
-        inputs = tokenizer(request.text, return_tensors="pt").to(DEVICE)
+        inputs = tokenizer(
+            request.text,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=512
+        ).to(DEVICE)
         
         with torch.no_grad():
             outputs = model(**inputs)

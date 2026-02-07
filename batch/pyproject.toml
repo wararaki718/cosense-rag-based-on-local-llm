@@ -8,7 +8,11 @@ dependencies = [
     "httpx",
     "pydantic",
     "tqdm",
+    "shared",
 ]
+
+[tool.uv.sources]
+shared = { path = "../shared" }
 
 [tool.uv]
 dev-dependencies = [

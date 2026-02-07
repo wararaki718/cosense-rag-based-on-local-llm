@@ -1,5 +1,7 @@
 import os
+import asyncio
 from typing import Dict, List
+from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -8,11 +10,67 @@ from fastapi.middleware.cors import CORSMiddleware
 from elasticsearch import AsyncElasticsearch
 from shared.models import ScrapboxChunk, SearchQuery, SearchResultItem
 
+# Configuration
+ES_URL = os.getenv("ELASTICSEARCH_URL", "http://localhost:9200")
+EMBEDDING_API_URL = os.getenv("EMBEDDING_API_URL", "http://localhost:8001")
+INDEX_NAME = os.getenv("INDEX_NAME", "scrapbox-chunks")
+
+es = AsyncElasticsearch(
+    ES_URL,
+    headers={"Accept": "application/vnd.elasticsearch+json; compatible-with=8"}
+)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifecycle manager for the FastAPI application."""
+    # Wait for ES to be truly ready (retry logic)
+    for i in range(10):
+        try:
+            if await es.ping():
+                break
+        except Exception:
+            pass
+        print(f"Waiting for Elasticsearch... ({i+1}/10)")
+        await asyncio.sleep(5)
+
+    try:
+        exists = await es.indices.exists(index=INDEX_NAME)
+        if not exists:
+            await es.indices.create(
+                index=INDEX_NAME,
+                body={
+                    "mappings": {
+                        "properties": {
+                            "content": {
+                                "type": "text",
+                                "analyzer": "kuromoji",
+                                "fields": {
+                                    "keyword": {"type": "keyword"}
+                                }
+                            },
+                            "page_title": {"type": "text", "analyzer": "kuromoji"},
+                            "project_name": {"type": "keyword"},
+                            "url": {"type": "keyword"},
+                            "updated_at": {"type": "date"},
+                            "indent_level": {"type": "integer"},
+                            "vector": {"type": "rank_features"}  # SPLADE vectors
+                        }
+                    }
+                }
+            )
+            print(f"Created index: {INDEX_NAME}")
+    except Exception as e:
+        print(f"Index creation step failed: {e}")
+    
+    yield
+    await es.close()
+
 # FastAPI App
 app = FastAPI(
     title="API Search Service",
     description="Elasticsearch wrapper for Hybrid Search (BM25 + Sparse Vector)",
-    version="0.1.0"
+    version="0.1.0",
+    lifespan=lifespan
 )
 
 # CORS Middleware
@@ -23,49 +81,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Configuration
-ES_URL = os.getenv("ELASTICSEARCH_URL", "http://localhost:9200")
-EMBEDDING_API_URL = os.getenv("EMBEDDING_API_URL", "http://localhost:8001")
-INDEX_NAME = os.getenv("INDEX_NAME", "scrapbox-chunks")
-
-es = AsyncElasticsearch(ES_URL)
-
-# Helper classes removed as they are now imported from shared.models
-
-@app.on_event("startup")
-async def startup_event() -> None:
-    """Initializes the Elasticsearch index and mappings on startup.
-
-    Checks for the existence of the configured index and creates it if missing,
-    defining the schema with kuromoji analyzer for Japanese text and rank_features
-    for sparse vectors.
-    """
-    exists = await es.indices.exists(index=INDEX_NAME)
-    if not exists:
-        await es.indices.create(
-            index=INDEX_NAME,
-            body={
-                "mappings": {
-                    "properties": {
-                        "content": {
-                            "type": "text",
-                            "analyzer": "kuromoji",
-                            "fields": {
-                                "keyword": {"type": "keyword"}
-                            }
-                        },
-                        "page_title": {"type": "text", "analyzer": "kuromoji"},
-                        "project_name": {"type": "keyword"},
-                        "url": {"type": "keyword"},
-                        "updated_at": {"type": "date"},
-                        "indent_level": {"type": "integer"},
-                        "vector": {"type": "rank_features"}  # SPLADE vectors
-                    }
-                }
-            }
-        )
-        print(f"Created index: {INDEX_NAME}")
 
 @app.post("/search", response_model=List[SearchResultItem])
 async def search(request: SearchQuery) -> List[SearchResultItem]:
@@ -164,7 +179,7 @@ async def index_chunk(chunk: ScrapboxChunk, vector: Dict[str, float]) -> dict:
         HTTPException: If indexing into Elasticsearch fails.
     """
     try:
-        body = chunk.dict()
+        body = chunk.model_dump(mode="json")
         body["vector"] = {str(k): v for k, v in vector.items()}
         await es.index(index=INDEX_NAME, id=chunk.id, body=body)
         return {"result": "indexed", "id": chunk.id}
@@ -180,3 +195,7 @@ async def health() -> dict:
     """
     es_health = await es.cluster.health()
     return {"status": "ok", "elasticsearch": es_health["status"]}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8002)

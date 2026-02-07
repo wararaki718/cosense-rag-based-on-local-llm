@@ -5,18 +5,15 @@ WORKDIR /app
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
-# Copy dependency files (from service dir)
+# Copy project files and shared directory
 COPY api-embedding/pyproject.toml .
+COPY shared /shared
 
 # Sync dependencies
 RUN uv sync --no-dev
 
-# Copy source code and shared models
+# Copy source code
 COPY api-embedding/main.py .
-COPY shared /app/shared
-
-# Ensure shared is in PYTHONPATH
-ENV PYTHONPATH=/app
 
 EXPOSE 8001
 

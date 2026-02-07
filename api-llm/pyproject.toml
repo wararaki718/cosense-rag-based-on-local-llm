@@ -9,7 +9,11 @@ dependencies = [
     "uvicorn",
     "httpx",
     "pydantic",
+    "shared",
 ]
+
+[tool.uv.sources]
+shared = { path = "../shared" }
 
 [tool.uv]
 dev-dependencies = [

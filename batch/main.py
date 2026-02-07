@@ -84,12 +84,15 @@ def chunk_page(page_data: Dict[str, Any], project: str) -> List[ScrapboxChunk]:
             else:
                 break
         
-        # Logic: If empty line or indent level decreases, start a new chunk
+        # Logic: If empty line or indent level decreases or chunk is too long, start a new chunk
         is_empty = not line_text.strip()
+        current_len = sum(len(l) for l in current_chunk)
         is_indent_decrease = (
             i > 0 and indent < current_indent and len(current_chunk) > 5
         )
-        if is_empty or is_indent_decrease:
+        is_too_long = current_len > 1000
+        
+        if is_empty or is_indent_decrease or is_too_long:
             if current_chunk:
                 chunk_text = "\n".join(current_chunk)
                 chunks.append(ScrapboxChunk(
@@ -122,33 +125,55 @@ def chunk_page(page_data: Dict[str, Any], project: str) -> List[ScrapboxChunk]:
         
     return chunks
 
-async def process_and_index(chunk: ScrapboxChunk, client: httpx.AsyncClient) -> None:
+async def process_and_index(chunk: ScrapboxChunk, client: httpx.AsyncClient, semaphore: asyncio.Semaphore) -> None:
     """Vectorizes a chunk and indices it into the search engine.
 
     Args:
         chunk (ScrapboxChunk): The chunk to be processed.
         client (httpx.AsyncClient): An active HTTP client for API calls.
+        semaphore (asyncio.Semaphore): To limit concurrent requests.
     """
-    try:
-        # 1. Vectorize
-        resp_embed = await client.post(
-            f"{EMBEDDING_API_URL}/embed",
-            json={"text": chunk.content}
-        )
-        if resp_embed.status_code != 200:
-            print(f"Failed to embed chunk {chunk.id}")
-            return
-        vector = resp_embed.json()["vector"]
-        
-        # 2. Index
-        resp_index = await client.post(f"{SEARCH_API_URL}/index", json={
-            "chunk": chunk.dict(),
-            "vector": vector
-        })
-        if resp_index.status_code != 200:
-            print(f"Failed to index chunk {chunk.id}: {resp_index.text}")
-    except Exception as e:
-        print(f"Error processing chunk {chunk.id}: {e}")
+    async with semaphore:
+        try:
+            # 1. Vectorize
+            resp_embed = await client.post(
+                f"{EMBEDDING_API_URL}/embed",
+                json={"text": chunk.content}
+            )
+            if resp_embed.status_code != 200:
+                print(f"Failed to embed chunk {chunk.id}: {resp_embed.text}")
+                return
+            vector = resp_embed.json()["vector"]
+            
+            # 2. Index
+            resp_index = await client.post(f"{SEARCH_API_URL}/index", json={
+                "chunk": chunk.model_dump(mode="json"),
+                "vector": vector
+            })
+            if resp_index.status_code != 200:
+                print(f"Failed to index chunk {chunk.id}: {resp_index.text}")
+        except Exception as e:
+            print(f"Error processing chunk {chunk.id} at {EMBEDDING_API_URL} or {SEARCH_API_URL}: {e}")
+
+async def wait_for_services(client: httpx.AsyncClient) -> bool:
+    """Waits for backend API services to become healthy."""
+    for api_name, url in [("Embedding", EMBEDDING_API_URL), ("Search", SEARCH_API_URL)]:
+        print(f"Checking {api_name} API at {url}...")
+        for i in range(20):
+            try:
+                resp = await client.get(f"{url}/health")
+                if resp.status_code == 200:
+                    print(f"{api_name} API is ready.")
+                    break
+            except Exception:
+                pass
+            if i % 5 == 0 and i > 0:
+                print(f"Still waiting for {api_name} API... ({i}/20)")
+            await asyncio.sleep(5)
+        else:
+            print(f"Error: {api_name} API is not responding.")
+            return False
+    return True
 
 async def main() -> None:
     """Main entry point for the Scrapbox data ingestion batch.
@@ -159,14 +184,18 @@ async def main() -> None:
         print("Error: SCRAPBOX_PROJECT is not set.")
         return
 
-    print(f"Fetching pages from project: {PROJECT_NAME}")
-    try:
-        pages = await fetch_pages(PROJECT_NAME)
-    except Exception as e:
-        print(f"Failed to fetch pages: {e}")
-        return
-    
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        if not await wait_for_services(client):
+            return
+
+        print(f"Fetching pages from project: {PROJECT_NAME}")
+        try:
+            pages = await fetch_pages(PROJECT_NAME)
+        except Exception as e:
+            print(f"Failed to fetch pages: {e}")
+            return
+        
+        semaphore = asyncio.Semaphore(10) # Limit concurrency
         for page_summary in tqdm(pages, desc="Processing pages"):
             page_data = await fetch_page_content(PROJECT_NAME, page_summary["title"])
             if not page_data:
@@ -175,7 +204,7 @@ async def main() -> None:
             chunks = chunk_page(page_data, PROJECT_NAME)
             
             # Process chunks in parallel for this page
-            tasks = [process_and_index(chunk, client) for chunk in chunks]
+            tasks = [process_and_index(chunk, client, semaphore) for chunk in chunks]
             await asyncio.gather(*tasks)
 
 if __name__ == "__main__":

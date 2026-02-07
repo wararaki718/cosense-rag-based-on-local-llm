@@ -24,7 +24,7 @@ services:
     ports:
       - "8001:8001"
     environment:
-      - MODEL_NAME=naver/splade-cocondenser-ensemblev2
+      - MODEL_NAME=naver/splade_v2_distil
       - DEVICE=cpu # Default to CPU in Docker unless specialized runtime used
     volumes:
       - ./shared:/app/shared

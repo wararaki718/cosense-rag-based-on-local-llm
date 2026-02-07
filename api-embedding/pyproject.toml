@@ -10,7 +10,11 @@ dependencies = [
     "torch",
     "transformers",
     "pydantic",
+    "shared",
 ]
+
+[tool.uv.sources]
+shared = { path = "../shared" }
 
 [tool.uv]
 dev-dependencies = [
