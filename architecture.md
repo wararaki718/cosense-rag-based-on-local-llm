@@ -54,14 +54,17 @@ Scrapboxの知識を検索可能な状態でElasticsearchに格納するプロ�
    - Scrapbox APIを利用し、対象プロジェクトから全ページデータをJSON形式で取得します。
 2. **前処理・分割（Chunking / Pre-processing）**
    - 長いページは意味のまとまりごとにテキストを適切な長さに分割（Chunking）します。
+   - **チャンキング戦略**: インデントの変化、空行、および最大1000文字のサイズ制限に基づき分割します。
    - ページタイトル、最終更新日、URLなどのメタ情報を各チャンクに付与します。
 3. **スパースベクトル化（SPLADE Encoder API）**
    - 分割したテキストを **SPLADE Encoder API** (FastAPI) に送信します。
-   - 内部のBERTモデル（SPLADE）が、テキストを「語彙拡張（Expansion）」されたスパースベクトル（単語重みの集合）に変換します。
+   - 内部のBERTモデル（`naver/splade_v2_distil`）が、テキストを「語彙拡張（Expansion）」されたスパースベクトル（単語重みの集合）に変換します。
+   - モデルの制限（512トークン）を超える入力に対しては、自動的な切り詰め（Truncation）を行います。
 4. **インデックス登録（Indexing）**
    - テキスト、メタデータ、およびSPLADEから返されたベクトル重みを **Elasticsearch** (v8.16) に格納します。
    - `text`および`title`フィールドには **kuromoji analyzer** を適用し、日本語検索に対応しています。
    - `sparse_vector`は `rank_features` 型として定義され、高速なスパースベクトル検索を可能にします。
+   - 通信には Pydantic v2 のシリアライズ規約を適用し、日付型等の整合性を確保します。
 
 ---
 

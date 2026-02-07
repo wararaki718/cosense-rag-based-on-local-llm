@@ -35,17 +35,21 @@ Scrapboxの知見を統合する、Apple Silicon (M1/M2/M3) 最適化済みの�
     make build
     make up
     ```
+    ※ 初回起動時は `api-embedding` が約500MB〜1GBのモデル（SPLADE）をダウンロードするため、準備完了まで数分かかります。
 
 2.  **埋め込みAPIのローカル起動 (MPS加速を利用する場合)**:
-    ※Docker内ではMPSが利用できないため、ベクトル化を高速に行いたい場合はローカルでの起動を推奨します。
+    ※Docker内ではMPSが利用できないため、ベクトル化を高速に行いたい場合はローカルでの起動を推奨します。その際、`api-search` などの他のサービスは `make up` で起動したままにしてください。
     ```bash
+    # batch/main.py の EMBEDDING_API_URL を localhost:8001 に向けて実行
     make api-embedding-dev
     ```
 
 3.  **Scrapboxデータのインデックス**:
     ```bash
-    make ingest project=あなたのプロジェクト名 [sid=プライベートプロジェクトの場合のconnect.sid]
+    # プロジェクト名 `stacker8` の場合
+    make ingest project=stacker8
     ```
+    ※ `batch` 処理は、`api-embedding` と `api-search` のヘルスチェックが通るまで自動的に待機します。
 
 4.  **UIへのアクセス**:
     [http://localhost:3000](http://localhost:3000) を開き、質問を入力してください。
@@ -57,7 +61,7 @@ Scrapboxの知見を統合する、Apple Silicon (M1/M2/M3) 最適化済みの�
 | `make build` | 全サービスのDockerイメージをビルド |
 | `make up` | 全サービスをバックグラウンドで起動 |
 | `make down` | サービスの停止と削除 |
-| `make ingest project=xxx` | Scrapboxデータの取り込み |
+| `make ingest project=xxx` | Scrapboxデータの取り込み (自動待機・並列制限付き) |
 | `make logs` | ログのリアルタイム表示 |
 | `make frontend-dev` | フロントエンドのローカル開発モード起動 |
 | `make api-embedding-dev` | 埋め込みAPIをMPS加速有効で起動 |
@@ -65,16 +69,16 @@ Scrapboxの知見を統合する、Apple Silicon (M1/M2/M3) 最適化済みの�
 ## 📐 技術仕様
 
 ### データ処理 (Batch)
-- **チャンキング**: インデントレベルと空行に基づいたセマンティックチャンキング。Scrapboxの構造的な文脈を維持。
-- **ベクトル化**: `naver/splade-cocondenser-ensemblev2` モデルを使用し、30,522次元のスパースベクトルを生成。
+- **チャンキング**: インデントレベル、空行、および **1000文字のサイズ制限** に基づいたセマンティックチャンキング。Scrapboxの構造的な文脈を維持しつつ、モデルのコンテキスト制限（512トークン）に最適化。
+- **ベクトル化**: `naver/splade_v2_distil` モデルを使用し、30,522次元のスパースベクトルを生成。Pydantic v2 の JSON シリアライズ規約に準拠。
 
 ### 検索ロジック (api-search)
-- **Elasticsearch Mapping**: `rank_features` フィールドを使用してスパースベクトルを格納。
-- **Hybrid Query**: BM25 によるテキストマッチングとスパースベクトルによる意味的マッチングを `should` 句で統合。
+- **Elasticsearch Mapping**: `rank_features` フィールドを使用してスパースベクトルを格納。日本語解析には `kuromoji` を使用。
+- **Hybrid Query**: BM25 によるテキストマッチングとスパースベクトルによる意味的マッチングを `should` 句で統合。Elasticsearch 8系との完全な通信互換性を確保。
 
 ### 推論 (api-llm)
 - **Prompt**: 検索結果から得られた上位K個のチャンクをコンテキストとして挿入。
-- **Gemma 3**: 日本語対応の Gemma 3 モデルを、温度 0.1 で実行し安定した回答を生成。
+- **Gemma 3**: 日本語対応の Gemma 3 モデルを、温度 0.1 で実行し安定した回答を生成。Ollama API 経由で推論を実行。
 
 ## 📄 ライセンス
 MIT License
