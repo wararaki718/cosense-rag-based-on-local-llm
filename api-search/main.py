@@ -1,9 +1,11 @@
 import os
+from typing import Dict, List
+
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+
 from elasticsearch import AsyncElasticsearch
-from typing import List, Dict, Any, Optional
 from shared.models import ScrapboxChunk, SearchQuery, SearchResultItem
 
 # FastAPI App
@@ -32,9 +34,12 @@ es = AsyncElasticsearch(ES_URL)
 # Helper classes removed as they are now imported from shared.models
 
 @app.on_event("startup")
-async def startup_event():
-    """
-    インデックスの作成とマッピングの定義
+async def startup_event() -> None:
+    """Initializes the Elasticsearch index and mappings on startup.
+
+    Checks for the existence of the configured index and creates it if missing,
+    defining the schema with kuromoji analyzer for Japanese text and rank_features
+    for sparse vectors.
     """
     exists = await es.indices.exists(index=INDEX_NAME)
     if not exists:
@@ -63,46 +68,32 @@ async def startup_event():
         print(f"Created index: {INDEX_NAME}")
 
 @app.post("/search", response_model=List[SearchResultItem])
-async def search(request: SearchQuery):
-    """
-    ハイブリッド検索 (BM25 + SPLADE) を実行します。
+async def search(request: SearchQuery) -> List[SearchResultItem]:
+    """Performs a hybrid search combining BM25 and SPLADE sparse vectors.
+
+    Args:
+        request (SearchQuery): Request containing search query and top_k parameter.
+
+    Returns:
+        List[SearchResultItem]: A list of ranked search results.
+
+    Raises:
+        HTTPException: If the embedding API call fails or Elasticsearch query errors.
     """
     try:
         # 1. Get vector from api-embedding
         async with httpx.AsyncClient() as client:
-            resp = await client.post(f"{EMBEDDING_API_URL}/embed", json={"text": request.query}, timeout=10.0)
+            resp = await client.post(
+                f"{EMBEDDING_API_URL}/embed",
+                json={"text": request.query},
+                timeout=10.0
+            )
             if resp.status_code != 200:
                 raise HTTPException(status_code=500, detail="Failed to get embedding")
             vector = resp.json()["vector"]
 
         # 2. Build multi-match + rank_feature query
         # Simplified hybrid search: linear combination via 'should'
-        query_body = {
-            "size": request.top_k,
-            "query": {
-                "bool": {
-                    "should": [
-                        {
-                            "multi_match": {
-                                "query": request.query,
-                                "fields": ["content^1.5", "page_title^2.0"],
-                                "boost": 1.0
-                            }
-                        },
-                        # SPLADE Sparse Vector search using rank_features
-                        *[
-                            {"rank_feature": {"field": "vector", "boost": weight, "log": {"scaling_factor": 1}, "field_name": str(idx)}}
-                            for idx, weight in list(vector.items())[:100] # Limit to top features for performance
-                        ]
-                    ]
-                }
-            }
-        }
-        
-        # Note: Elasticsearch rank_feature query structure is actually slightly different for multiple features.
-        # For SPLADE, we often index them as separate fields or use a script.
-        # ES 8.8+ supports `sparse_vector` type but it's for ELSER.
-        # For custom SPLADE, 'rank_features' (plural) field type is best.
         
         # Correct rank_features query for multiple features:
         combined_query = {
@@ -110,10 +101,15 @@ async def search(request: SearchQuery):
             "query": {
                 "bool": {
                     "should": [
-                        {"multi_match": {"query": request.query, "fields": ["content", "page_title"]}}
+                        {
+                            "multi_match": {
+                                "query": request.query,
+                                "fields": ["content", "page_title"],
+                            }
+                        }
                     ]
                 }
-            }
+            },
         }
         
         # Adding rank features
@@ -151,12 +147,21 @@ async def search(request: SearchQuery):
 
     except Exception as e:
         print(f"Error during search: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 @app.post("/index")
-async def index_chunk(chunk: ScrapboxChunk, vector: Dict[str, float]):
-    """
-    チャンクをベクトル付きでインデックスに登録します。
+async def index_chunk(chunk: ScrapboxChunk, vector: Dict[str, float]) -> dict:
+    """Indexes a single chunk with its corresponding vector.
+
+    Args:
+        chunk (ScrapboxChunk): The chunk metadata and content.
+        vector (Dict[str, float]): The sparse vector weights for the chunk.
+
+    Returns:
+        dict: A confirmation message with the indexed ID.
+
+    Raises:
+        HTTPException: If indexing into Elasticsearch fails.
     """
     try:
         body = chunk.dict()
@@ -164,9 +169,14 @@ async def index_chunk(chunk: ScrapboxChunk, vector: Dict[str, float]):
         await es.index(index=INDEX_NAME, id=chunk.id, body=body)
         return {"result": "indexed", "id": chunk.id}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 @app.get("/health")
-async def health():
+async def health() -> dict:
+    """Checks service health and Elasticsearch connectivity.
+
+    Returns:
+        dict: Status of the service and Elasticsearch cluster health.
+    """
     es_health = await es.cluster.health()
     return {"status": "ok", "elasticsearch": es_health["status"]}

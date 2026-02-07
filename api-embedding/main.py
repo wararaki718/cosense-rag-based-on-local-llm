@@ -1,8 +1,10 @@
 import os
+
 import torch
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from transformers import AutoModelForMaskedLM, AutoTokenizer
+
 from shared.models import EmbeddingRequest, EmbeddingResponse
 
 # FastAPI App
@@ -33,9 +35,17 @@ model.eval()
 # Helper classes removed as they are now imported from shared.models
 
 @app.post("/embed", response_model=EmbeddingResponse, summary="Vectorize text")
-async def embed(request: EmbeddingRequest):
-    """
-    テキストを SPLADE スパースベクトルに変換します。
+async def embed(request: EmbeddingRequest) -> EmbeddingResponse:
+    """Transforms input text into a SPLADE sparse vector.
+
+    Args:
+        request (EmbeddingRequest): Request containing the text to be vectorized.
+
+    Returns:
+        EmbeddingResponse: Response containing the calculated sparse vector weights.
+
+    Raises:
+        HTTPException: If the vectorization process fails or the model errors.
     """
     try:
         inputs = tokenizer(request.text, return_tensors="pt").to(DEVICE)
@@ -59,10 +69,15 @@ async def embed(request: EmbeddingRequest):
 
         return EmbeddingResponse(vector=values)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 @app.get("/health")
-async def health():
+async def health() -> dict:
+    """Checks the health status of the embedding service.
+
+    Returns:
+        dict: A dictionary containing the status, target device, and model name.
+    """
     return {"status": "ok", "device": DEVICE, "model": MODEL_NAME}
 
 if __name__ == "__main__":

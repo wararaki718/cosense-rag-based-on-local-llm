@@ -1,0 +1,17 @@
+# Target version
+target-version = "py312"
+
+# Same as Black.
+line-length = 88
+
+[lint]
+# Enable Pyflakes (`F`) and a subset of the pycodestyle (`E`)  codes by default.
+# Plus: Isort (`I`), Pydocstyle (`D`), and some others.
+select = ["E", "F", "I", "D", "B", "C4", "ARG"]
+ignore = ["D100", "D104", "D107"] # Missing docstring in public module/package/init
+
+[lint.pydocstyle]
+convention = "google"
+
+[lint.isort]
+known-first-party = ["shared"]

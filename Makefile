@@ -1,6 +1,6 @@
 # Scrapbox RAG Project Makefile
 
-.PHONY: help setup up down ps logs build ingest frontend-dev
+.PHONY: help setup up down ps logs build ingest frontend-dev lint lint-fix
 
 help: ## Show help messages
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -47,3 +47,9 @@ api-search-dev: ## Run search API locally
 
 api-llm-dev: ## Run LLM API locally
 	cd api-llm && uv run main.py
+
+lint: ## Run linter checks (Ruff)
+	uv run ruff check .
+
+lint-fix: ## Run linter and apply automatic fixes
+	uv run ruff check . --fix

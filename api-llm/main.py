@@ -1,9 +1,10 @@
 import os
+
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List
-from shared.models import ScrapboxChunk, LLMRequest, LLMResponse
+
+from shared.models import LLMRequest, LLMResponse
 
 # FastAPI App
 app = FastAPI(
@@ -28,16 +29,28 @@ MODEL_NAME = os.getenv("MODEL_NAME", "gemma3:4b")
 # Helper classes removed as they are now imported from shared.models
 
 @app.post("/generate", response_model=LLMResponse)
-async def generate(request: LLMRequest):
-    """
-    検索コンテキストに基づいて回答を生成します。
+async def generate(request: LLMRequest) -> LLMResponse:
+    """Generates an answer based on the provided search context.
+
+    Constructs a RAG prompt using the retrieved Scrapbox chunks and queries
+    the Ollama inference engine for a response.
+
+    Args:
+        request (LLMRequest): User query and a list of contextually relevant chunks.
+
+    Returns:
+        LLMResponse: The generated answer and a unique list of source URLs.
+
+    Raises:
+        HTTPException: If communication with Ollama fails or returns an error.
     """
     try:
         # 1. Build context string
         context_str = ""
         sources = []
         for i, chunk in enumerate(request.context):
-            context_str += f"--- Source {i+1}: {chunk.page_title} ---\n{chunk.content}\n\n"
+            line = f"--- Source {i+1}: {chunk.page_title} ---\n{chunk.content}\n\n"
+            context_str += line
             if chunk.url not in sources:
                 sources.append(chunk.url)
 
@@ -68,23 +81,31 @@ async def generate(request: LLMRequest):
                     }
                 }
             )
-            
+
             if resp.status_code != 200:
-                raise HTTPException(status_code=500, detail="Failed to communicate with Ollama")
-            
+                raise HTTPException(
+                    status_code=500, detail="Failed to communicate with Ollama"
+                )
+
             answer = resp.json()["response"]
             
         return LLMResponse(answer=answer.strip(), sources=sources)
 
     except Exception as e:
         print(f"Error during LLM generation: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 @app.get("/health")
-async def health():
+async def health() -> dict:
+    """Checks service health and Ollama connectivity status.
+
+    Returns:
+        dict: Status of the service and Ollama connection state.
+    """
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.get(f"{OLLAMA_URL}/api/tags")
-            return {"status": "ok", "ollama": "connected" if resp.status_code == 200 else "error"}
-    except:
+            status = "connected" if resp.status_code == 200 else "error"
+            return {"status": "ok", "ollama": status}
+    except Exception:
         return {"status": "ok", "ollama": "disconnected"}
