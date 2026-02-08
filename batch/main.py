@@ -1,5 +1,6 @@
 import asyncio
 import os
+import urllib.parse
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -14,11 +15,12 @@ SCRAPBOX_SID = os.getenv("SCRAPBOX_SID")
 EMBEDDING_API_URL = os.getenv("EMBEDDING_API_URL", "http://localhost:8001")
 SEARCH_API_URL = os.getenv("SEARCH_API_URL", "http://localhost:8002")
 
-async def fetch_pages(project: str) -> List[dict]:
+async def fetch_pages(project: str, client: httpx.AsyncClient) -> List[dict]:
     """Retrieves all page metadata from the Scrapbox project.
 
     Args:
         project (str): The Scrapbox project name.
+        client (httpx.AsyncClient): The HTTP client to use.
 
     Returns:
         List[dict]: A list of page summary objects.
@@ -26,31 +28,39 @@ async def fetch_pages(project: str) -> List[dict]:
     Raises:
         httpx.HTTPStatusError: If the API request fails.
     """
-    headers = {"Cookie": f"connect.sid={SCRAPBOX_SID}"} if SCRAPBOX_SID else {}
-    async with httpx.AsyncClient(headers=headers) as client:
-        # Get all pages list
-        url = f"https://scrapbox.io/api/pages/{project}?limit=1000"
-        resp = await client.get(url)
-        resp.raise_for_status()
-        return resp.json()["pages"]
+    url = f"https://scrapbox.io/api/pages/{project}?limit=1000"
+    resp = await client.get(url)
+    resp.raise_for_status()
+    return resp.json()["pages"]
 
-async def fetch_page_content(project: str, title: str) -> Optional[Dict[str, Any]]:
-    """Retrieves detailed content for a specific Scrapbox page.
+async def fetch_page_content(project: str, title: str, client: httpx.AsyncClient) -> Optional[Dict[str, Any]]:
+    """Retrieves detailed content for a specific Scrapbox page with retry logic.
 
     Args:
         project (str): The Scrapbox project name.
         title (str): The title of the page to fetch.
+        client (httpx.AsyncClient): The HTTP client to use.
 
     Returns:
         Optional[Dict[str, Any]]: The full page data, or None if the request failed.
     """
-    headers = {"Cookie": f"connect.sid={SCRAPBOX_SID}"} if SCRAPBOX_SID else {}
-    async with httpx.AsyncClient(headers=headers) as client:
-        url = f"https://scrapbox.io/api/pages/{project}/{title}"
-        resp = await client.get(url)
-        if resp.status_code != 200:
-            return None
-        return resp.json()
+    encoded_title = urllib.parse.quote(title, safe="")
+    url = f"https://scrapbox.io/api/pages/{project}/{encoded_title}"
+    
+    for attempt in range(3):
+        try:
+            resp = await client.get(url)
+            if resp.status_code == 200:
+                return resp.json()
+            if resp.status_code == 404:
+                return None
+            print(f"Warning: Got status {resp.status_code} for {title}. Retrying... ({attempt+1}/3)")
+        except (httpx.ReadError, httpx.ConnectError) as e:
+            print(f"Network error fetching {title}: {e}. Retrying... ({attempt+1}/3)")
+        
+        await asyncio.sleep(2 ** attempt)  # Exponential backoff
+        
+    return None
 
 def chunk_page(page_data: Dict[str, Any], project: str) -> List[ScrapboxChunk]:
     """Segments a Scrapbox page into chunks based on indentation and empty lines.
@@ -184,20 +194,21 @@ async def main() -> None:
         print("Error: SCRAPBOX_PROJECT is not set.")
         return
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    headers = {"Cookie": f"connect.sid={SCRAPBOX_SID}"} if SCRAPBOX_SID else {}
+    async with httpx.AsyncClient(headers=headers, timeout=60.0) as client:
         if not await wait_for_services(client):
             return
 
         print(f"Fetching pages from project: {PROJECT_NAME}")
         try:
-            pages = await fetch_pages(PROJECT_NAME)
+            pages = await fetch_pages(PROJECT_NAME, client)
         except Exception as e:
             print(f"Failed to fetch pages: {e}")
             return
         
         semaphore = asyncio.Semaphore(10) # Limit concurrency
         for page_summary in tqdm(pages, desc="Processing pages"):
-            page_data = await fetch_page_content(PROJECT_NAME, page_summary["title"])
+            page_data = await fetch_page_content(PROJECT_NAME, page_summary["title"], client)
             if not page_data:
                 continue
                 
